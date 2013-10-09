@@ -61,7 +61,7 @@ void do_op(int is_write, int fd, char* buf, int page_offset, int i)
 		DISPLAY("%d) %s to one page=%u (buf[0]=%d)\n", 
 			i, (is_write == OP_WRITE)?"write":"read", page_offset, ((int*)buf)[0]);
 
-	if(OP_WRITE)
+	if(is_write)
 	        ret = pwrite(fd, buf, PAGE_SIZE, page_offset*PAGE_SIZE);
 	else
 		ret = pread(fd, buf, PAGE_SIZE, page_offset*PAGE_SIZE);
