@@ -29,6 +29,7 @@ int usage_advanced()
     DISPLAY( "Possible arguments :\n");
     DISPLAY( " -V     : verbose mode\n");
     DISPLAY( " -v     : verbose mode\n");
+    DISPLAY( " -d     : device name\n");
     DISPLAY( " -i#    : number of reads/writes\n");
     DISPLAY( " -m     : mixed reads/writes\n");
     DISPLAY( " -w     : do writes\n");
@@ -113,7 +114,7 @@ int main(int argc, char** argv){
 						DISPLAY ("error - what follows -d is not a string");
 						exit(-1);	
 					}
-
+					break;
 				// Display help
 				case 'h': 
 				case 'H': usage_advanced(); return 0;
