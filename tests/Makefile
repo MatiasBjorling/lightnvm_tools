@@ -1,5 +1,5 @@
 CC=gcc
-CFLAGS=-c -Wall -g -I/home/aviadzuc/git/linux_openssd/drivers/md
+CFLAGS=-c -Wall -g
 LDFLAGS=
 SOURCES=simple.c
 OBJECTS=$(SOURCES:.c=.o)

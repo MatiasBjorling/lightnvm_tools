@@ -6,8 +6,8 @@
 #include <sys/fcntl.h>
 #include <stdint.h>
 #include <sys/ioctl.h>
-#include "dm-openssd.h"
-#include "dm-openssd-hint.h"
+#include "drivers/md/dm-openssd.h"
+#include "drivers/md/dm-openssd-hint.h"
 
 #define PAGE_SIZE (4096)
 #define DISPLAY(...)         fprintf(stderr, __VA_ARGS__)
