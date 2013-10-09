@@ -125,7 +125,7 @@ int main(int argc, char** argv){
 				case 's': hint_type = HINT_SWAP; break;
 
 				// mixed workload
-				case 'm': mixed=1;wr=1;rd=1;fanatic=0;break;
+				case 'm': mixed=1;wr=1;rd=1;break;
 
 				// do reads
 				case 'r': rd=1; break;
@@ -138,7 +138,7 @@ int main(int argc, char** argv){
 				case 'V': verbose=1; break;
 
 				// fanatic mode
-				case 'f': fanatic=1;mixed=0; break;
+				case 'f': fanatic=1;break;
 
 				// max offset
 				case 'x':
@@ -164,6 +164,8 @@ int main(int argc, char** argv){
 		        }
 		}
 	}
+
+	DISPLAY("mixed=%d", mixed);
 
 	// sanity fanatic
 	if(fanatic && iterations > 50000000){
@@ -209,7 +211,8 @@ int main(int argc, char** argv){
 			}
 			set_hint(&hint_data, hint_type, ino, page_offset, fc, OP_WRITE);
 	
-			DISPLAY("hint to one PAGE=%u\n", page_offset);
+			if(verbose)
+				DISPLAY("hint to one PAGE=%u\n", page_offset);
 			assert(!ioctl(fd, OPENSSD_IOCTL_SUBMIT_HINT, &hint_data));
 		}
 
