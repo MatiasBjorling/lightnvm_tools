@@ -1,10 +1,12 @@
 #define _GNU_SOURCE
+#include <assert.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <fcntl.h>
-#include <assert.h>
-#include <sys/fcntl.h>
 #include <stdint.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/fcntl.h>
 #include <sys/ioctl.h>
 #include "drivers/md/dm-openssd.h"
 #include "drivers/md/dm-openssd-hint.h"
@@ -81,7 +83,7 @@ int get_offset(int is_random, int i, int max)
 
 int main(int argc, char** argv)
 {
-	int i, ret;
+	int i;
 	static char buf[PAGE_SIZE] __attribute__ ((__aligned__ (4096)));
 	int page_offset, fd;
 	hint_data_t hint_data;
@@ -255,7 +257,7 @@ int main(int argc, char** argv)
 	if(!rd || mixed) {
 		assert(!close(fd));
 		DISPLAY("test done\n");
-		return;
+		return 0;
 	}
 	DISPLAY("sleeping, to allow GC to kick in...\n");
 	sleep(10);
