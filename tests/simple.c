@@ -31,7 +31,7 @@ int usage_advanced()
 	DISPLAY( "Possible arguments :\n");
 	DISPLAY( " -V     : verbose mode\n");
 	DISPLAY( " -v     : verbose mode\n");
-	DISPLAY( " -d     : device name\n");
+	DISPLAY( " -d     : device name. defaults to /dev/mapper/dm2.\n");
 	DISPLAY( " -i#    : number of reads/writes\n");
 	DISPLAY( " -m     : mixed reads/writes\n");
 	DISPLAY( " -w     : do writes\n");
