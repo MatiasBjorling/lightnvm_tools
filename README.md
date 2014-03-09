@@ -1,4 +1,4 @@
-openssd_tools
+lightnvm_tools
 =============
 
-Collection of tools for openssd implementation within the device mapping linux layer
+Collection of tools for the lightnvm device mapper module.
