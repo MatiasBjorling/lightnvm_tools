@@ -1,5 +1,5 @@
 CC=gcc
-CFLAGS=-c -Wall -g
+CFLAGS=-c -Wall -std=c99 -g
 LDFLAGS=
 SOURCES=ioctl_test.c cutest/CuTest.c
 OBJECTS=$(SOURCES:.c=.o)
