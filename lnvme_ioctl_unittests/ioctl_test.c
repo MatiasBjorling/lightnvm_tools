@@ -113,6 +113,7 @@ enum lnvme_admin_opcode {
 	lnvme_admin_set_responsibility	= 0xc3,
 	lnvme_admin_get_l2p_tbl	= 0xc4,
 	lnvme_admin_get_p2l_tbl	= 0xc5,
+	lnvme_admin_flush_tbls		= 0xc6,
 };
 
 enum nvme_opcode {
@@ -418,6 +419,20 @@ void responsibility_set(CuTest *self, uint32_t resp, uint32_t val)
 		__responsibility_set, input);
 }
 
+void __flush_tbl_cb(struct nvme_admin_cmd *cmd, void *data)
+{
+	uint32_t *nsid = data;
+	cmd->opcode = lnvme_admin_flush_tbls;
+	cmd->nsid = *nsid;
+}
+
+void flush_tbl(CuTest *self, uint32_t nsid)
+{
+	struct data_buffer buf = {.data = NULL, .len = 0};
+	ioctl_admin_cmd(self, &buf, NVME_IOCTL_ADMIN_CMD,
+		__flush_tbl_cb, &nsid);
+}
+
 #define FORMAT_GET_LBAF(x) ((x) & 15)
 #define FORMAT_GET_MS(x) ( (x)>>4 & 1)
 #define FORMAT_GET_PI(x) ( (x)>>5 & 7 )
@@ -478,6 +493,43 @@ void format_ns(CuTest *self, uint32_t nsid, uint32_t format_settings)
 	CuAssertTrue(self, nsid != 0);
 	ioctl_admin_cmd(self, &buf, NVME_IOCTL_ADMIN_CMD,
 		__format_ns, data);
+}
+
+#define TBL_P2L 3ULL
+#define TBL_L2P 4ULL
+typedef uint64_t tbl_type_t;
+
+struct tbl_req {
+	tbl_type_t tbl;
+	uint64_t slba;
+	uint16_t nlb;
+	uint32_t nsid;
+};
+
+void __get_tbl_cb(struct nvme_admin_cmd *cmd, void *data)
+{
+	struct tbl_req *req = data;
+	if (req->tbl == TBL_P2L) {
+		cmd->opcode = lnvme_admin_get_p2l_tbl;
+	} else {
+		err("unhandled test case -- asking for L2P table%d\n", 1);
+	}
+	cmd->nsid = req->nsid;
+	cmd->cdw10 = (uint32_t)(req->slba & 0xffffffff);
+	cmd->cdw11 = (uint32_t)((req->slba)>>32);
+	cmd->cdw12 = (uint32_t)(req->nlb);
+}
+
+void get_tbl(CuTest *self, tbl_type_t tbl_type, uint32_t nsid,
+	uint64_t slba, void *buffer, size_t len)
+{
+	/*uint16_t nlb*/
+	struct data_buffer buf = {.data = buffer, .len = len};
+	struct tbl_req req = {.tbl = tbl_type, .slba = slba,
+			      .nlb = len/(1<<9), .nsid = nsid};
+	CuAssertTrue(self, nsid !=  0);
+	ioctl_admin_cmd(self, &buf, NVME_IOCTL_ADMIN_CMD,
+			__get_tbl_cb, &req);
 }
 
 TEST(identify)
@@ -588,6 +640,52 @@ TEST(write_lba)
 	CuAssertTrue(self, ret == 0);
 }
 
+TEST(p2l_tbl)
+{
+	int ret;
+	struct lnvme_id_chnl chnl;
+	void *wbuf;
+	uint32_t *tblbuf;
+	uint32_t const nsid = 1;
+	size_t const tbl_len = 7 * (1 << 9);
+	size_t const wbuf_len = 12288;
+	uint64_t const slba = 2;
+
+	wbuf = calloc(1, wbuf_len);
+	CuAssertTrue(self, wbuf != NULL);
+	tblbuf = calloc(1, tbl_len);
+	CuAssertTrue(self, tblbuf != NULL);
+
+	/*clear P2L tbl & sets r/w/e granularity to 4K*/
+	format_ns(self, nsid,
+		FORMAT_SET_LBAF(format_default_settings(), 3)
+	);
+
+	identify_chnl(self, &chnl, nsid);
+	CuAssertTrue(self, chnl.gran_read == 4096);
+	CuAssertTrue(self, chnl.gran_write == 4096);
+	CuAssertTrue(self, chnl.gran_erase == 4096);
+
+	get_tbl(self, TBL_P2L, nsid, slba-1, tblbuf, tbl_len);
+	fprintf(stderr, "dumping BEFORE write (slba-1)\n");
+	memdump(tblbuf, 0, tbl_len);
+	fprintf(stderr, "\n\n");
+
+	ret = readfile("testdata", rand() % (TEST_FILE_SIZE-wbuf_len),
+		wbuf, wbuf_len);
+	CuAssertTrue(self, ret == wbuf_len);
+
+	ioctl_io_write(self, slba, wbuf, wbuf_len);
+
+	fprintf(stderr, "BEFORE flush\n");
+	flush_tbl(self, nsid);
+	fprintf(stderr, "AFTER flush\n");
+
+	get_tbl(self, TBL_P2L, nsid, slba-1, tblbuf, tbl_len);
+	fprintf(stderr, "dumping AFTER write, (slba-1)\n");
+	memdump(tblbuf, 0, tbl_len);
+}
+
 CuSuite *IdentifySuite()
 {
 	CuSuite *suite = CuSuiteNew();
@@ -597,6 +695,7 @@ CuSuite *IdentifySuite()
 	SUITE_ADD_TEST(suite, test_set_features);
 	SUITE_ADD_TEST(suite, test_format_ns);
 	SUITE_ADD_TEST(suite, test_write_lba);
+	SUITE_ADD_TEST(suite, test_p2l_tbl);
 	return suite;
 }
 
