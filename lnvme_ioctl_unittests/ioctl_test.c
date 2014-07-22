@@ -125,6 +125,11 @@ enum nvme_opcode {
 	nvme_cmd_dsm		= 0x09,
 };
 
+enum lnvme_opcode {
+	lnvme_cmd_erase_sync	= 0x80,
+	lnvme_cmd_erase_async	= 0x81,
+};
+
 enum LnvmeFeatures {
     R_L2P_MAPPING	= 0U,
     R_P2L_MAPPING	= 1U,
@@ -495,6 +500,39 @@ void format_ns(CuTest *self, uint32_t nsid, uint32_t format_settings)
 		__format_ns, data);
 }
 
+static int __lnvme_erase (CuTest *self, uint8_t cmd_code, uint32_t nsid,
+			uint64_t slba, uint16_t nlb)
+{
+	int ret, fd;
+	struct nvme_user_io *cmd;
+	CuAssert(self, "nlb cannot be 0, must be 1 or more", nlb != 0);
+
+	fd = open(LNVME_DEV, O_RDONLY);
+	CuAssertTrue(self, fd != 0);
+
+	cmd = alloc_ioctl_uio(0);
+	CuAssertTrue(self, cmd != NULL);
+
+	cmd->opcode = lnvme_cmd_erase_sync;
+	cmd->slba = slba;
+	cmd->nblocks = nlb - 1;
+
+	ret = ioctl(fd, NVME_IOCTL_SUBMIT_IO, cmd);
+	close(fd);
+	free(cmd);
+	CuAssertTrue(self, ret >= 0);
+}
+
+int erase_sync(CuTest *self, uint32_t nsid, uint64_t slba, uint16_t nlb)
+{
+	return __lnvme_erase(self, lnvme_cmd_erase_sync, nsid, slba, nlb);
+}
+
+int erase_async(CuTest *self, uint32_t nsid, uint64_t slba, uint16_t nlb)
+{
+	return __lnvme_erase(self, lnvme_cmd_erase_async, nsid, slba, nlb);
+}
+
 #define TBL_P2L 3ULL
 #define TBL_L2P 4ULL
 typedef uint64_t tbl_type_t;
@@ -640,6 +678,16 @@ TEST(write_lba)
 	CuAssertTrue(self, ret == 0);
 }
 
+TEST(erase_sync)
+{
+	int ret;
+	uint64_t const slba = 1000;
+	uint16_t const nlb = 16;
+	uint32_t const nsid = 1;
+
+	erase_sync(self, nsid, slba, nlb);
+}
+
 TEST(p2l_tbl)
 {
 	int ret;
@@ -695,6 +743,8 @@ CuSuite *IdentifySuite()
 	SUITE_ADD_TEST(suite, test_set_features);
 	SUITE_ADD_TEST(suite, test_format_ns);
 	SUITE_ADD_TEST(suite, test_write_lba);
+	SUITE_ADD_TEST(suite, test_erase_sync);
+	/*SUITE_ADD_TEST(suite, test_erase_async);*/
 	SUITE_ADD_TEST(suite, test_p2l_tbl);
 	return suite;
 }
