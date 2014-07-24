@@ -499,7 +499,7 @@ void format_ns(CuTest *self, uint32_t nsid, uint32_t format_settings)
 		__format_ns, data);
 }
 
-static int __lnvme_erase (CuTest *self, uint8_t cmd_code, uint32_t nsid,
+static void __lnvme_erase (CuTest *self, uint8_t cmd_code, uint32_t nsid,
 			uint64_t slba, uint16_t nlb)
 {
 	int ret, fd;
@@ -522,12 +522,12 @@ static int __lnvme_erase (CuTest *self, uint8_t cmd_code, uint32_t nsid,
 	CuAssertTrue(self, ret >= 0);
 }
 
-int erase_sync(CuTest *self, uint32_t nsid, uint64_t slba, uint16_t nlb)
+void erase_sync(CuTest *self, uint32_t nsid, uint64_t slba, uint16_t nlb)
 {
 	return __lnvme_erase(self, lnvme_cmd_erase_sync, nsid, slba, nlb);
 }
 
-int erase_async(CuTest *self, uint32_t nsid, uint64_t slba, uint16_t nlb)
+void erase_async(CuTest *self, uint32_t nsid, uint64_t slba, uint16_t nlb)
 {
 	return __lnvme_erase(self, lnvme_cmd_erase_async, nsid, slba, nlb);
 }
