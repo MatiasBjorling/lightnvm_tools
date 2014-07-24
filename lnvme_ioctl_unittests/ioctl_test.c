@@ -159,7 +159,6 @@ void *alloc_ioctl_structure(size_t cmd_len, size_t data_len, uint64_t *data_addr
 
 	*data_addr = (uint64_t)base + cmd_len;
 	if (do_pad) {
-		//data = (data + sizeof(void*)) && ~3;
 		*data_addr = (*data_addr + sizeof(void*)) && ~3;
 	}
 
@@ -561,7 +560,6 @@ void __get_tbl_cb(struct nvme_admin_cmd *cmd, void *data)
 void get_tbl(CuTest *self, tbl_type_t tbl_type, uint32_t nsid,
 	uint64_t slba, void *buffer, size_t len)
 {
-	/*uint16_t nlb*/
 	struct data_buffer buf = {.data = buffer, .len = len};
 	struct tbl_req req = {.tbl = tbl_type, .slba = slba,
 			      .nlb = len/(1<<9), .nsid = nsid};
@@ -680,7 +678,6 @@ TEST(write_lba)
 
 TEST(erase_sync)
 {
-	int ret;
 	uint64_t const slba = 1000;
 	uint16_t const nlb = 16;
 	uint32_t const nsid = 1;
@@ -773,7 +770,7 @@ void run_all_tests(suite_cb fn)
 
 int main(int argc, char **argv)
 {
-	fprintf(stderr, "Failing tests CAN alter expected "
+	fprintf(stderr, "\n\n\nFailing tests CAN alter expected "
 		"device state - run once per boot!\n");
 	run_all_tests(add_suites);
 	return 0;
