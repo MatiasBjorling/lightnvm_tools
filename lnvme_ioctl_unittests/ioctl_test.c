@@ -716,9 +716,6 @@ TEST(p2l_tbl)
 	CuAssertTrue(self, chnl.gran_erase == 4096);
 
 	get_tbl(self, TBL_P2L, nsid, slba-1, tblbuf, tbl_len);
-	fprintf(stderr, "dumping BEFORE write (slba-1)\n");
-	memdump(tblbuf, 0, tbl_len);
-	fprintf(stderr, "\n\n");
 
 	ret = readfile("testdata", rand() % (TEST_FILE_SIZE-wbuf_len),
 		wbuf, wbuf_len);
@@ -726,13 +723,9 @@ TEST(p2l_tbl)
 
 	ioctl_io_write(self, hlba, slba, wbuf, wbuf_len);
 
-	fprintf(stderr, "BEFORE flush\n");
 	flush_tbl(self, nsid);
-	fprintf(stderr, "AFTER flush\n");
 
 	get_tbl(self, TBL_P2L, nsid, slba-1, tblbuf, tbl_len);
-	fprintf(stderr, "dumping AFTER write, (slba-1)\n");
-	memdump(tblbuf, 0, tbl_len);
 }
 
 CuSuite *IdentifySuite()
