@@ -688,6 +688,22 @@ TEST(erase_sync)
 	erase_sync(self, nsid, slba, nlb);
 }
 
+int validate_tbl_region(uint32_t start_hlba, void *tbl_buf, size_t off, size_t nlb)
+{
+	uint32_t *ptr = ((uint32_t *)tbl_buf)+off;
+	uint32_t hlba;
+	size_t i;
+	for (i = 0; i < nlb; i++, ptr++) {
+		hlba = __cpu_to_le32(start_hlba + 1);
+		if ( *ptr != hlba ) {
+		fprintf(stderr, "validate_tbl_region: (le32) value! expected (%"SCNx32") got (%"SCNx32")\n",
+			hlba, *ptr);
+			return i;
+		}
+	}
+	return 0;
+}
+
 TEST(p2l_tbl)
 {
 	int ret;
@@ -726,6 +742,16 @@ TEST(p2l_tbl)
 	flush_tbl(self, nsid);
 
 	get_tbl(self, TBL_P2L, nsid, slba-1, tblbuf, tbl_len);
+
+	/*Validate that X entries were written, ascending values from 'hlba'
+	 and that surrounding entries are zero, still*/
+	ret = validate_tbl_region(hlba, tblbuf, 1, wbuf_len % chnl.gran_write);
+	CuAssert(self, "p2l tbl contents didn't match expected contents\n", ret == 0);
+
+	CuAssert(self, "entry before expected entries has been written to!",
+		tblbuf[0] == 0);
+	CuAssert(self, "entry following expected entries has been written to!",
+		tblbuf[1 + wbuf_len % chnl.gran_write] == 0);
 }
 
 CuSuite *IdentifySuite()
