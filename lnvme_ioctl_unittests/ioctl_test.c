@@ -335,35 +335,38 @@ void __ioctl_iorw_cb(struct nvme_user_io *cmd, void *data)
 {
 	uint64_t *input = data;
 	uint64_t dir, slba;
+	uint32_t host_lba;
 	dir = input[0];
 	slba = input[1];
+	host_lba = (uint32_t)input[2];
 
 	if (dir == DATA_DIR_WRITE)
 		cmd->opcode = nvme_cmd_write;
 	else if (dir == DATA_DIR_READ)
 		cmd->opcode = nvme_cmd_read;
 	cmd->slba = slba;
+	cmd->host_lba = host_lba;
 }
 
-void __ioctl_io(CuTest *self, data_dir_t dir,
-	uint64_t slba, void *buffer, size_t len)
+void __ioctl_io(CuTest *self, data_dir_t dir, uint32_t hlba,
+		uint64_t slba, void *buffer, size_t len)
 {
 	struct data_buffer buf = {.data = (uint8_t *)buffer, .len = len};
-	uint64_t input[2] = { dir, slba };
+	uint64_t input[3] = {dir, slba, hlba};
 	CuAssertTrue(self, buffer != NULL);
 	CuAssertTrue(self, len != 0);
 
 	ioctl_io_cmd(self, dir, &buf, __ioctl_iorw_cb, input);
 }
 
-void ioctl_io_write(CuTest *self, uint64_t slba, void *buf, size_t len)
+void ioctl_io_write(CuTest *self, uint32_t hlba, uint64_t slba, void *buf, size_t len)
 {
-	__ioctl_io(self, DATA_DIR_WRITE, slba, buf, len);
+	__ioctl_io(self, DATA_DIR_WRITE, hlba, slba, buf, len);
 }
 
 void ioctl_io_read(CuTest *self, uint64_t slba, void *buf, size_t len)
 {
-	__ioctl_io(self, DATA_DIR_READ, slba, buf, len);
+	__ioctl_io(self, DATA_DIR_READ, 0, slba, buf, len);
 }
 
 void __identify_cb(struct nvme_admin_cmd *cmd, void *data)
@@ -662,7 +665,7 @@ TEST(write_lba)
 	ret = memcmp(wbuf, rbuf, data_size);
 	CuAssertTrue(self, ret != 0);
 
-	ioctl_io_write(self, slba, wbuf, data_size);
+	ioctl_io_write(self, 0, slba, wbuf, data_size);
 
 	ioctl_io_read(self, slba, rbuf, data_size);
 
@@ -695,6 +698,7 @@ TEST(p2l_tbl)
 	size_t const tbl_len = 7 * (1 << 9);
 	size_t const wbuf_len = 12288;
 	uint64_t const slba = 2;
+	uint32_t const hlba = 0x89abcdef;
 
 	wbuf = calloc(1, wbuf_len);
 	CuAssertTrue(self, wbuf != NULL);
@@ -720,7 +724,7 @@ TEST(p2l_tbl)
 		wbuf, wbuf_len);
 	CuAssertTrue(self, ret == wbuf_len);
 
-	ioctl_io_write(self, slba, wbuf, wbuf_len);
+	ioctl_io_write(self, hlba, slba, wbuf, wbuf_len);
 
 	fprintf(stderr, "BEFORE flush\n");
 	flush_tbl(self, nsid);
