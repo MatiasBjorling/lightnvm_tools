@@ -571,6 +571,25 @@ void get_tbl(CuTest *self, tbl_type_t tbl_type, uint32_t nsid,
 			__get_tbl_cb, &req);
 }
 
+TEST(format_ns)
+{
+	struct lnvme_id id;
+	struct lnvme_id_chnl id_chnl;
+	identify_ctrl(self, &id);
+	CuAssertTrue(self, id.nchannels == LNVME_CHNL);
+
+	identify_chnl(self, &id_chnl, 1);
+	CuAssertTrue(self, id_chnl.gran_read != 0);
+
+	format_ns(self, 1, format_default_settings());
+	identify_chnl(self, &id_chnl, 1);
+	CuAssertTrue(self, id_chnl.gran_read == 512);
+
+	format_ns(self, 1, FORMAT_SET_LBAF(format_default_settings(), 3));
+	identify_chnl(self, &id_chnl, 1);
+	CuAssertTrue(self, id_chnl.gran_read == 4096);
+}
+
 TEST(identify)
 {
 	struct lnvme_id id;
@@ -612,7 +631,7 @@ TEST(get_features)
 	CuAssertTrue(self, !__get_feature(resp, E_SAFE_SHUTDOWN));
 }
 
-TEST(set_features)
+TEST(set_responsibility)
 {
 	uint8_t buf[BITS_TO_BYTES(512)];
 	uint64_t *resp = (uint64_t *)buf;
@@ -624,25 +643,6 @@ TEST(set_features)
 	responsibility_set(self, R_ECC, 1);
 	features_get(self, buf);
 	CuAssertTrue(self, __get_feature(resp, R_ECC));
-}
-
-TEST(format_ns)
-{
-	struct lnvme_id id;
-	struct lnvme_id_chnl id_chnl;
-	identify_ctrl(self, &id);
-	CuAssertTrue(self, id.nchannels == LNVME_CHNL);
-
-	identify_chnl(self, &id_chnl, 1);
-	CuAssertTrue(self, id_chnl.gran_read != 0);
-
-	format_ns(self, 1, format_default_settings());
-	identify_chnl(self, &id_chnl, 1);
-	CuAssertTrue(self, id_chnl.gran_read == 512);
-
-	format_ns(self, 1, FORMAT_SET_LBAF(format_default_settings(), 3));
-	identify_chnl(self, &id_chnl, 1);
-	CuAssertTrue(self, id_chnl.gran_read == 4096);
 }
 
 TEST(write_lba)
@@ -757,11 +757,11 @@ TEST(p2l_tbl)
 CuSuite *IdentifySuite()
 {
 	CuSuite *suite = CuSuiteNew();
+	SUITE_ADD_TEST(suite, test_format_ns);
 	SUITE_ADD_TEST(suite, test_identify);
 	SUITE_ADD_TEST(suite, test_identify_channel);
 	SUITE_ADD_TEST(suite, test_get_features);
-	SUITE_ADD_TEST(suite, test_set_features);
-	SUITE_ADD_TEST(suite, test_format_ns);
+	SUITE_ADD_TEST(suite, test_set_responsibility);
 	SUITE_ADD_TEST(suite, test_write_lba);
 	SUITE_ADD_TEST(suite, test_erase_sync);
 	/*SUITE_ADD_TEST(suite, test_erase_async);*/
