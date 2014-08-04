@@ -11,6 +11,21 @@
 #include <inttypes.h>
 #include <assert.h>
 
+/* [TODO]
+ * Test if OpenVSL b0rked non-4k granularity modes or if LNVM code is
+ *    still having issues.
+ *
+ * Fix erase test, it's still not complete.
+ *
+ * Fix erase async test.
+ *
+ * Expand LNVM code to err out when attempting to erase something
+ *    which isn't a perfect multiple of the erase granularity
+ *
+ * Fix Read/Write interface to utilize correct R,W granularity instead
+ *   of guessing.
+ */
+
 #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
 #include <linux/byteorder/little_endian.h>
 #elif __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
@@ -62,7 +77,7 @@ struct PACKED lnvme_id_chnl {
 	uint8_t	io_sched;
 	uint64_t	laddr_begin;
 	uint64_t	laddr_end;
-	uint8_t	unused[4034];
+	uint8_t	unused[4019];
 };
 
 struct PACKED nvme_admin_cmd {
@@ -182,17 +197,19 @@ out:
 	return cmd;
 }
 
-struct nvme_user_io *alloc_ioctl_uio(size_t data_len)
+struct nvme_user_io *alloc_ioctl_uio(size_t len, uint64_t gran)
 {
 	struct nvme_user_io *uio = NULL;
 	uint64_t data_addr;
 	uio = alloc_ioctl_structure(
 		sizeof(struct nvme_user_io),
-		data_len, &data_addr);
+		len, &data_addr);
 	if (!uio)
 		goto out;
 	uio->addr = data_addr;
-	uio->nblocks = (data_len / LBA_SIZE) - 1;
+	if (len) {
+		uio->nblocks = (len / gran) - 1;
+	}
 out:
 	return uio;
 }
@@ -263,13 +280,13 @@ uint8_t __get_feature(uint64_t *features, uint32_t ndx)
 }
 
 typedef void (*cmd_cfg_cb)(struct nvme_admin_cmd *cmd, void *data);
-struct data_buffer
+struct admin_cmd_buf
 {
 	uint8_t *data;
 	size_t len;
 };
 
-void ioctl_admin_cmd(CuTest *self, struct data_buffer *buf, int ioctl_cmd,
+void ioctl_admin_cmd(CuTest *self, struct admin_cmd_buf *buf, int ioctl_cmd,
 		cmd_cfg_cb usr_cb, void *data)
 {
 	int ret, fd;
@@ -278,8 +295,9 @@ void ioctl_admin_cmd(CuTest *self, struct data_buffer *buf, int ioctl_cmd,
 	CuAssertTrue(self, buf != NULL);
 	CuAssertTrue(self, usr_cb != NULL);
 
-	if (buf->len)
+	if (buf->len) {
 		memset(buf->data, 0, buf->len);
+	}
 	fd = open(LNVME_DEV, O_RDONLY);
 	CuAssertTrue(self, fd != -1);
 	cmd = alloc_ioctl_cmd(buf->len);
@@ -294,81 +312,6 @@ void ioctl_admin_cmd(CuTest *self, struct data_buffer *buf, int ioctl_cmd,
 	free(cmd);
 }
 
-#define DATA_DIR_READ 1ULL
-#define DATA_DIR_WRITE 2ULL
-typedef uint64_t data_dir_t;
-typedef void (*cmd_io_cb)(struct nvme_user_io *cmd, void *data);
-
-void ioctl_io_cmd(CuTest *self, data_dir_t dir,
-		struct data_buffer *buf, cmd_io_cb usr_cb, void *data)
-{
-	int ret, fd;
-	struct nvme_user_io *cmd = NULL;
-
-	CuAssertTrue(self, buf != NULL);
-	CuAssertTrue(self, buf->len != 0 );
-	CuAssertTrue(self, usr_cb != NULL);
-	CuAssertTrue(self, dir == DATA_DIR_READ
-		|| dir == DATA_DIR_WRITE);
-
-	if (dir == DATA_DIR_READ)
-		memset(buf->data, 0, buf->len);
-
-	fd = open(LNVME_DEV, O_RDONLY);
-	CuAssertTrue(self, fd != -1);
-
-	cmd = alloc_ioctl_uio(buf->len);
-	CuAssertTrue(self, cmd != NULL);
-	usr_cb(cmd, data);
-
-	if (dir == DATA_DIR_WRITE)
-		memcpy((void *)cmd->addr, buf->data, buf->len);
-	ret = ioctl(fd, NVME_IOCTL_SUBMIT_IO, cmd);
-	close(fd);
-	CuAssertTrue(self, ret >= 0);
-	if (dir == DATA_DIR_READ)
-		memcpy(buf->data, (void const *)cmd->addr, buf->len);
-	free(cmd);
-}
-
-void __ioctl_iorw_cb(struct nvme_user_io *cmd, void *data)
-{
-	uint64_t *input = data;
-	uint64_t dir, slba;
-	uint32_t host_lba;
-	dir = input[0];
-	slba = input[1];
-	host_lba = (uint32_t)input[2];
-
-	if (dir == DATA_DIR_WRITE)
-		cmd->opcode = nvme_cmd_write;
-	else if (dir == DATA_DIR_READ)
-		cmd->opcode = nvme_cmd_read;
-	cmd->slba = slba;
-	cmd->host_lba = host_lba;
-}
-
-void __ioctl_io(CuTest *self, data_dir_t dir, uint32_t hlba,
-		uint64_t slba, void *buffer, size_t len)
-{
-	struct data_buffer buf = {.data = (uint8_t *)buffer, .len = len};
-	uint64_t input[3] = {dir, slba, hlba};
-	CuAssertTrue(self, buffer != NULL);
-	CuAssertTrue(self, len != 0);
-
-	ioctl_io_cmd(self, dir, &buf, __ioctl_iorw_cb, input);
-}
-
-void ioctl_io_write(CuTest *self, uint32_t hlba, uint64_t slba, void *buf, size_t len)
-{
-	__ioctl_io(self, DATA_DIR_WRITE, hlba, slba, buf, len);
-}
-
-void ioctl_io_read(CuTest *self, uint64_t slba, void *buf, size_t len)
-{
-	__ioctl_io(self, DATA_DIR_READ, 0, slba, buf, len);
-}
-
 void __identify_cb(struct nvme_admin_cmd *cmd, void *data)
 {
 	cmd->opcode = lnvme_admin_identify;
@@ -376,7 +319,7 @@ void __identify_cb(struct nvme_admin_cmd *cmd, void *data)
 
 void identify_ctrl(CuTest *self, struct lnvme_id *id)
 {
-	struct data_buffer buf = {.data = (uint8_t *)id, .len = sizeof(*id)};
+	struct admin_cmd_buf buf = {.data = (uint8_t *)id, .len = sizeof(*id)};
 	CuAssertTrue(self, id != NULL);
 	ioctl_admin_cmd(self, &buf, NVME_IOCTL_ADMIN_CMD, __identify_cb, NULL);
 }
@@ -390,7 +333,7 @@ void __identify_chnl(struct nvme_admin_cmd *cmd, void *data)
 
 void identify_chnl(CuTest *self, struct lnvme_id_chnl *id_chnl, uint32_t nsid)
 {
-	struct data_buffer buf = {.data = (uint8_t *)id_chnl,
+	struct admin_cmd_buf buf = {.data = (uint8_t *)id_chnl,
 				  .len = sizeof(*id_chnl)};
 	CuAssertTrue(self, id_chnl != NULL);
 	ioctl_admin_cmd(self, &buf, NVME_IOCTL_ADMIN_CMD,
@@ -404,7 +347,7 @@ void __features_get(struct nvme_admin_cmd *cmd, void *data)
 
 void features_get(CuTest *self, uint8_t *buffer)
 {
-	struct data_buffer buf = {.data = buffer, .len = BITS_TO_BYTES(512)};
+	struct admin_cmd_buf buf = {.data = buffer, .len = BITS_TO_BYTES(512)};
 	CuAssertTrue(self, buffer != NULL);
 	ioctl_admin_cmd(self, &buf, NVME_IOCTL_ADMIN_CMD,
 		__features_get, NULL);
@@ -420,7 +363,7 @@ void __responsibility_set(struct nvme_admin_cmd *cmd, void *data)
 
 void responsibility_set(CuTest *self, uint32_t resp, uint32_t val)
 {
-	struct data_buffer buf = {.data = NULL, .len = 0};
+	struct admin_cmd_buf buf = {.data = NULL, .len = 0};
 	uint32_t input[2] = {resp, val};
 	ioctl_admin_cmd(self, &buf, NVME_IOCTL_ADMIN_CMD,
 		__responsibility_set, input);
@@ -435,7 +378,7 @@ void __flush_tbl_cb(struct nvme_admin_cmd *cmd, void *data)
 
 void flush_tbl(CuTest *self, uint32_t nsid)
 {
-	struct data_buffer buf = {.data = NULL, .len = 0};
+	struct admin_cmd_buf buf = {.data = NULL, .len = 0};
 	ioctl_admin_cmd(self, &buf, NVME_IOCTL_ADMIN_CMD,
 		__flush_tbl_cb, &nsid);
 }
@@ -496,7 +439,7 @@ void __format_ns(struct nvme_admin_cmd *cmd, void *data)
 void format_ns(CuTest *self, uint32_t nsid, uint32_t format_settings)
 {
 	uint32_t data[2] = { nsid, format_settings };
-	struct data_buffer buf = {.data = NULL, .len = 0};
+	struct admin_cmd_buf buf = {.data = NULL, .len = 0};
 	CuAssertTrue(self, nsid != 0);
 	ioctl_admin_cmd(self, &buf, NVME_IOCTL_ADMIN_CMD,
 		__format_ns, data);
@@ -512,7 +455,7 @@ static void __lnvme_erase (CuTest *self, uint8_t cmd_code, uint32_t nsid,
 	fd = open(LNVME_DEV, O_RDONLY);
 	CuAssertTrue(self, fd != 0);
 
-	cmd = alloc_ioctl_uio(0);
+	cmd = alloc_ioctl_uio(0,0);
 	CuAssertTrue(self, cmd != NULL);
 
 	cmd->opcode = lnvme_cmd_erase_sync;
@@ -563,12 +506,156 @@ void __get_tbl_cb(struct nvme_admin_cmd *cmd, void *data)
 void get_tbl(CuTest *self, tbl_type_t tbl_type, uint32_t nsid,
 	uint64_t slba, void *buffer, size_t len)
 {
-	struct data_buffer buf = {.data = buffer, .len = len};
+	struct admin_cmd_buf buf = {.data = buffer, .len = len};
 	struct tbl_req req = {.tbl = tbl_type, .slba = slba,
 			      .nlb = len/(1<<9), .nsid = nsid};
 	CuAssertTrue(self, nsid !=  0);
 	ioctl_admin_cmd(self, &buf, NVME_IOCTL_ADMIN_CMD,
 			__get_tbl_cb, &req);
+}
+
+typedef enum {
+	IOTYPE_READ	= 0ULL,
+	IOTYPE_WRITE	= 1ULL,
+	IOTYPE_ERASE	= 2ULL,
+} IOType;
+
+uint64_t get_granularity(CuTest *self, uint32_t nsid, IOType t)
+{
+	struct lnvme_id_chnl chnl;
+	identify_chnl(self, &chnl, nsid);
+	switch(t) {
+	case IOTYPE_READ:
+		return __le64_to_cpu(chnl.gran_read);
+	case IOTYPE_WRITE:
+		return __le64_to_cpu(chnl.gran_write);
+	case IOTYPE_ERASE:
+		return __le64_to_cpu(chnl.gran_erase);
+	default:
+		return 0;
+	}
+}
+
+uint64_t len_to_nblocks(CuTest *self,
+			uint32_t nsid, IOType t, uint64_t len)
+{
+	uint64_t gran = get_granularity(self, nsid, t);
+	CuAssert(self,
+		"data length in test NOT an exact multiple of blocks!",
+		len % gran == 0
+	);
+	return len / gran;
+}
+
+//#define DATA_DIR_READ 1ULL
+//#define DATA_DIR_WRITE 2ULL
+//typedef uint64_t data_dir_t;
+
+typedef void (*cmd_io_cb)(struct nvme_user_io *cmd, void *data);
+struct uio_buf {
+	uint8_t *data;
+	size_t len;
+	uint64_t gran;
+};
+
+void ioctl_io_cmd(CuTest *self, IOType iot,
+		struct uio_buf *buf, cmd_io_cb usr_cb, void *data)
+{
+	int ret, fd;
+	struct nvme_user_io *cmd = NULL;
+
+	CuAssertTrue(self, buf != NULL);
+	CuAssertTrue(self, buf->len != 0);
+	CuAssertTrue(self, buf->gran != 0);
+	CuAssertTrue(self, usr_cb != NULL);
+	CuAssertTrue(self, iot == IOTYPE_READ
+		|| iot == IOTYPE_WRITE);
+
+	if (iot == IOTYPE_READ)
+		memset(buf->data, 0, buf->len);
+
+	fd = open(LNVME_DEV, O_RDONLY);
+	CuAssertTrue(self, fd != -1);
+
+	cmd = alloc_ioctl_uio(buf->len, buf->gran);
+	CuAssertTrue(self, cmd != NULL);
+	usr_cb(cmd, data);
+
+	if (iot == IOTYPE_WRITE)
+		memcpy((void *)cmd->addr, buf->data, buf->len);
+	ret = ioctl(fd, NVME_IOCTL_SUBMIT_IO, cmd);
+	close(fd);
+	CuAssertTrue(self, ret >= 0);
+	if (iot == IOTYPE_READ)
+		memcpy(buf->data, (void const *)cmd->addr, buf->len);
+	free(cmd);
+}
+
+void __ioctl_iorw_cb(struct nvme_user_io *cmd, void *data)
+{
+	uint64_t *input = data;
+	uint64_t iot, slba;
+	uint32_t host_lba;
+	iot = input[0];
+	slba = input[1];
+	host_lba = (uint32_t)input[2];
+
+	if(iot == IOTYPE_WRITE)
+		cmd->opcode = nvme_cmd_write;
+	else if (iot == IOTYPE_READ)
+		cmd->opcode = nvme_cmd_read;
+	cmd->slba = slba;
+	cmd->host_lba = host_lba;
+}
+
+void __ioctl_io(CuTest *self, IOType iot, uint32_t hlba,
+		uint64_t slba, void *buffer, size_t len)
+{
+	uint64_t input[3] = {iot, slba, hlba};
+	struct uio_buf buf = {
+		.data = (uint8_t *)buffer,
+		.len = len,
+		.gran = 0
+	};
+	buf.gran = get_granularity(self, 1, iot);
+
+	CuAssertTrue(self, buffer != NULL);
+	CuAssertTrue(self, len != 0);
+	CuAssert(self,
+		"buffers must be an exact multiple of"
+		"IO type granularity",
+		buf.len % buf.gran == 0
+	);
+
+	ioctl_io_cmd(self, iot, &buf, __ioctl_iorw_cb, input);
+}
+
+void ioctl_io_write(CuTest *self, uint32_t hlba, uint64_t slba,
+		void *buf, size_t len)
+{
+	__ioctl_io(self, IOTYPE_WRITE, hlba, slba, buf, len);
+}
+
+void ioctl_io_read(CuTest *self, uint64_t slba,
+		void *buf, size_t len)
+{
+	__ioctl_io(self, IOTYPE_READ, 0, slba, buf, len);
+}
+
+/*    --[TEST CODE BEGIN]--    */
+/*=============================*/
+void test_setup(CuTest *self)
+{
+	uint32_t const nsid = 1;
+	/*clear P2L tbl & sets r/w/e granularity to 4K*/
+	format_ns(self, nsid,
+		FORMAT_SET_LBAF(format_default_settings(), 3)
+	);
+}
+
+void test_teardown(CuTest *self)
+{
+	/*do nothing*/
 }
 
 TEST(format_ns)
@@ -679,13 +766,59 @@ TEST(write_lba)
 	CuAssertTrue(self, ret == 0);
 }
 
+int memcmp0(void const *buf, size_t off, size_t len)
+{ /*return 0 if entire range is zero, +1/-1 otherwise*/
+	uint8_t cmp_blk[len];
+	uint8_t *c = (uint8_t *)buf;
+	memset(cmp_blk, 0, sizeof(cmp_blk));
+	return memcmp(cmp_blk, c + off , len);
+}
+
 TEST(erase_sync)
+{
+	uint64_t const slba = 1000;
+	uint32_t const nsid = 1;
+	uint16_t nlb = 4;
+
+	struct lnvme_id_chnl chnl;
+	size_t data_size;
+	uint8_t *buf = NULL;
+	long ret;
+
+	identify_chnl(self, &chnl, 1);
+	CuAssert(self,
+		"Test not written to account for erase and write "
+		"granularity being different!",
+		chnl.gran_erase == chnl.gran_write
+	);
+
+	data_size = nlb * __le64_to_cpu(chnl.gran_write);
+	buf = calloc(1, data_size);
+	CuAssert(self, "Memory allocation for test failed!", buf);
+
+	ret = readfile("testdata", rand() % (TEST_FILE_SIZE-data_size),
+		buf, data_size);
+	CuAssert(self, "error reading testdata into buffer",
+		ret == data_size);
+	ioctl_io_write(self, 0, slba, buf, data_size);
+
+	erase_sync(self, nsid, slba, nlb);
+	memset(buf, 0, data_size);
+	ioctl_io_read(self, slba, buf, data_size);
+
+	ret = memcmp0(buf, 0, data_size);
+	CuAssert(self, "Erase command didn't properly erase data!",
+		ret == 0);
+}
+
+TEST(erase_async)
 {
 	uint64_t const slba = 1000;
 	uint16_t const nlb = 16;
 	uint32_t const nsid = 1;
 
-	erase_sync(self, nsid, slba, nlb);
+	CuAssert(self, "Test not written yet", 1 == 0);
+	erase_async(self, nsid, slba, nlb);
 }
 
 int validate_tbl_region(uint32_t start_hlba, void *tbl_buf, size_t off, size_t nlb)
@@ -754,9 +887,10 @@ TEST(p2l_tbl)
 		tblbuf[1 + wbuf_len % chnl.gran_write] == 0);
 }
 
-CuSuite *IdentifySuite()
+typedef void (*suite_cfg_cb)(CuSuite *suite);
+
+void IdentifySuite(CuSuite *suite)
 {
-	CuSuite *suite = CuSuiteNew();
 	SUITE_ADD_TEST(suite, test_format_ns);
 	SUITE_ADD_TEST(suite, test_identify);
 	SUITE_ADD_TEST(suite, test_identify_channel);
@@ -764,23 +898,18 @@ CuSuite *IdentifySuite()
 	SUITE_ADD_TEST(suite, test_set_responsibility);
 	SUITE_ADD_TEST(suite, test_write_lba);
 	SUITE_ADD_TEST(suite, test_erase_sync);
-	/*SUITE_ADD_TEST(suite, test_erase_async);*/
+	SUITE_ADD_TEST(suite, test_erase_async);
 	SUITE_ADD_TEST(suite, test_p2l_tbl);
-	return suite;
+
+	suite->setup = test_setup;
+	suite->teardown = test_teardown;
 }
 
-typedef void (*suite_cb)(CuSuite *);
-
-void add_suites(CuSuite *suite)
-{
-	CuSuiteAddSuite(suite, IdentifySuite());
-}
-
-void run_all_tests(suite_cb fn)
+void run_all_tests(suite_cfg_cb suite_cfg)
 {
 	CuSuite *suite = CuSuiteNew();
 	CuString *output = CuStringNew();
-	fn(suite);
+	suite_cfg(suite);
 
 	CuSuiteRun(suite);
 	CuSuiteSummary(suite, output);
@@ -790,11 +919,10 @@ void run_all_tests(suite_cb fn)
 	CuSuiteDelete(suite);
 }
 
-
 int main(int argc, char **argv)
 {
 	fprintf(stderr, "\n\n\nFailing tests CAN alter expected "
 		"device state - run once per boot!\n");
-	run_all_tests(add_suites);
+	run_all_tests(IdentifySuite);
 	return 0;
 }
