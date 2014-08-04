@@ -239,7 +239,9 @@ void CuSuiteInit(CuSuite* testSuite)
 {
 	testSuite->count = 0;
 	testSuite->failCount = 0;
-        memset(testSuite->list, 0, sizeof(testSuite->list));
+	testSuite->setup = NULL;
+	testSuite->teardown = NULL;
+	memset(testSuite->list, 0, sizeof(testSuite->list));
 }
 
 CuSuite* CuSuiteNew(void)
@@ -286,7 +288,11 @@ void CuSuiteRun(CuSuite* testSuite)
 	for (i = 0 ; i < testSuite->count ; ++i)
 	{
 		CuTest* testCase = testSuite->list[i];
+		if (testSuite->setup)
+			testSuite->setup(testCase);
 		CuTestRun(testCase);
+		if (testSuite->teardown)
+			testSuite->teardown(testCase);
 		if (testCase->failed) { testSuite->failCount += 1; }
 	}
 }

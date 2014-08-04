@@ -100,7 +100,8 @@ typedef struct
 	int count;
 	CuTest* list[MAX_TEST_CASES];
 	int failCount;
-
+	void (*setup)(CuTest *self);
+	void (*teardown)(CuTest *self);
 } CuSuite;
 
 
