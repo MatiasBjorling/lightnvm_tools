@@ -47,8 +47,6 @@
 #define T_SQW		10000
 #define T_E		100000
 #define IOSCHED_CHNL	0
-#define LBA_SHIFT	12
-#define LBA_SIZE	(1U << LBA_SHIFT)
 
 #define TEST_FILE_SIZE	130000
 #define BITS_TO_BYTES(x) ((x) >> 3)
@@ -571,8 +569,9 @@ void ioctl_io_cmd(CuTest *self, IOType iot,
 	CuAssertTrue(self, iot == IOTYPE_READ
 		|| iot == IOTYPE_WRITE);
 
-	if (iot == IOTYPE_READ)
+	if (iot == IOTYPE_READ) {
 		memset(buf->data, 0, buf->len);
+	}
 
 	fd = open(LNVME_DEV, O_RDONLY);
 	CuAssertTrue(self, fd != -1);
@@ -774,18 +773,15 @@ int memcmp0(void const *buf, size_t off, size_t len)
 	return memcmp(cmp_blk, c + off , len);
 }
 
-TEST(erase_sync)
+void __erase_common_start(CuTest *self, uint64_t slba, uint32_t nsid,
+		uint16_t nlb, size_t *data_size_out, uint8_t **buf_out)
 {
-	uint64_t const slba = 1000;
-	uint32_t const nsid = 1;
-	uint16_t nlb = 4;
-
 	struct lnvme_id_chnl chnl;
 	size_t data_size;
 	uint8_t *buf = NULL;
 	long ret;
 
-	identify_chnl(self, &chnl, 1);
+	identify_chnl(self, &chnl, nsid);
 	CuAssert(self,
 		"Test not written to account for erase and write "
 		"granularity being different!",
@@ -802,23 +798,57 @@ TEST(erase_sync)
 		ret == data_size);
 	ioctl_io_write(self, 0, slba, buf, data_size);
 
-	erase_sync(self, nsid, slba, nlb);
-	memset(buf, 0, data_size);
+	/*Common path ends, return values*/
+	*data_size_out = data_size;
+	*buf_out = buf;
+}
+
+void __erase_common_end(CuTest *self, uint64_t slba,
+			uint8_t *buf, size_t data_size)
+{
+	long ret;
+
 	ioctl_io_read(self, slba, buf, data_size);
 
 	ret = memcmp0(buf, 0, data_size);
-	CuAssert(self, "Erase command didn't properly erase data!",
+	CuAssert(self, "xErase command didn't properly erase data!",
 		ret == 0);
+	free(buf);
+}
+
+TEST(erase_sync)
+{
+	uint64_t const slba = 1000;
+	uint32_t const nsid = 1;
+	uint16_t const nlb = 4;
+
+	size_t data_size;
+	uint8_t *buf;
+
+	__erase_common_start(self, slba, nsid, nlb, &data_size, &buf);
+
+	erase_sync(self, nsid, slba, nlb);
+	__erase_common_end(self, slba, buf, data_size);
 }
 
 TEST(erase_async)
 {
 	uint64_t const slba = 1000;
-	uint16_t const nlb = 16;
 	uint32_t const nsid = 1;
+	uint16_t const nlb = 4;
 
-	CuAssert(self, "Test not written yet", 1 == 0);
+	size_t data_size;
+	uint8_t *buf;
+
+	__erase_common_start(self, slba, nsid, nlb, &data_size, &buf);
+
+	/*Admittedly dirty but I have no other recourse*/
 	erase_async(self, nsid, slba, nlb);
+	CuAssert(self,
+		"sleep was interrupted, re-run tests!",
+		sleep(2) == 0);
+
+	__erase_common_end(self, slba, buf, data_size);
 }
 
 int validate_tbl_region(uint32_t start_hlba, void *tbl_buf, size_t off, size_t nlb)
