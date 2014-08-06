@@ -11,19 +11,34 @@
 #include <inttypes.h>
 #include <assert.h>
 
+/* [NOTES]
+ * At the moment presupposing the Qemu backing device because:
+ *    1) formatting namespace allows setting the LBAF which we
+ *       also use to manipulate the LNVM granularity values.
+ *       These values should be be a consequence of the disk
+ *       characteristics (and therefore fixed)
+ *
+ *    2) Manipulating LBAF we ASSUME that:
+ *        LBA[0]: LBA_DS=512B, MS=0B
+ *        LBA[1]: LBA_DS=1024B, MS=0B
+ *        etc until LBA[4] where DS is 512B again but now MS != 0
+ *
+ *         This varies between drives..! Ideally we should:
+ *         1) call NVM 'identify channel'
+ *         2) read 'NLBAF' and loop through the 'LBA Format support'
+ *            entries (format described in Fig. 85 of the NVM 1.1 spec)
+ */
+
 /* [TODO]
  * Test if OpenVSL b0rked non-4k granularity modes or if LNVM code is
  *    still having issues.
  *
- * Fix erase test, it's still not complete.
- *
- * Fix erase async test.
- *
  * Expand LNVM code to err out when attempting to erase something
  *    which isn't a perfect multiple of the erase granularity
  *
- * Fix Read/Write interface to utilize correct R,W granularity instead
- *   of guessing.
+ * Try erasing in the middle of some data
+ *   (write: slba=>10, nlb=>5)
+ *   (erase: slba=>12, nlb=>2)
  */
 
 #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
@@ -97,6 +112,24 @@ struct PACKED nvme_admin_cmd {
 	uint32_t	cdw15;
 	uint32_t	timeout_ms;
 	uint32_t	result;
+};
+
+struct PACKED lbaf {
+	uint16_t	ms;
+	uint8_t	ds;
+	uint8_t	rp_and_res;
+};
+
+struct PACKED nvme_id_ns {
+	/*[00:24] */
+	uint8_t	ignored1[25];
+	uint8_t	nlbaf;
+	/*[26;127]*/
+	uint8_t	ignored2[102];
+	/*[128:191]*/
+	struct lbaf	lbafs[16];
+	/*[192:4095]*/
+	uint8_t	ignored3[3904];
 };
 
 struct nvme_user_io {
@@ -244,6 +277,7 @@ void memdump(void *mem, size_t off, size_t len)
 		fprintf(stderr, "%"PRIx8, *b);
 		b++;
 	}
+	fprintf(stderr, "\n");
 }
 
 void free_cmd(struct nvme_admin_cmd *cmd)
@@ -630,6 +664,45 @@ void ioctl_io_read(CuTest *self, uint64_t slba,
 	__ioctl_io(self, IOTYPE_READ, 0, slba, buf, len);
 }
 
+void __identify_ns_cb(struct nvme_admin_cmd *cmd, void *data)
+{
+	static int const nvme_admin_identify = 0x06;
+	uint32_t const nsid = *((uint32_t *)data);
+	cmd->opcode = nvme_admin_identify;
+	cmd->nsid = nsid;
+}
+
+void identify_ns(CuTest *self, uint32_t nsid, struct nvme_id_ns *id)
+{ /*regular NVMe call*/
+	struct admin_cmd_buf buf = {
+		.data = (uint8_t *)id,
+		.len = sizeof(*id)
+	};
+	CuAssertTrue(self, id != NULL);
+	ioctl_admin_cmd(self, &buf, NVME_IOCTL_ADMIN_CMD,
+			__identify_ns_cb, &nsid);
+}
+
+int log2i(int x)
+{
+	return __builtin_ctz(x);
+}
+
+int find_lbaf_w_ds(CuTest *self, int byte_size)
+{ /*find index of first LBAF where data size == byte_size*/
+	struct nvme_id_ns id_ns;
+	int lbads = log2i(byte_size);
+	int i;
+
+	identify_ns(self, 1, &id_ns);
+	for (i = 0; i < id_ns.nlbaf; i++) {
+		if (id_ns.lbafs[i].ds == lbads) {
+			return i;
+		}
+	}
+	return -1;
+}
+
 /*    --[TEST CODE BEGIN]--    */
 /*=============================*/
 void test_setup(CuTest *self)
@@ -720,11 +793,30 @@ TEST(set_responsibility)
 	CuAssertTrue(self, __get_feature(resp, R_ECC));
 }
 
-TEST(write_lba)
+void __test_write_dbg_dump(void *buf, char *bufname,
+			long off, size_t data_size)
+{
+	static long const dump_pre = 10;
+	static long dump_len = 100;
+	long dump_off;
+
+	if ( (off-dump_pre) > 0 ) {
+		dump_off = off - dump_pre;
+	} else {
+		dump_off = off;
+	}
+	if ( (dump_off + dump_len) > data_size ) {
+		dump_len = data_size - dump_off;
+	}
+	printf("%s: [%ld:%ld]:\n", bufname, dump_off,
+		dump_off+dump_len);
+	memdump(buf, dump_off, dump_len);
+}
+
+void __test_write(CuTest *self, uint64_t const slba,
+		size_t const data_size)
 {
 	long ret;
-	size_t const data_size = 12288;
-	uint64_t const slba = 1000;
 	uint8_t *wbuf = NULL, *rbuf = NULL;
 
 	wbuf = calloc(1, data_size);
@@ -747,11 +839,69 @@ TEST(write_lba)
 	ret = memcmp(wbuf, rbuf, data_size);
 	if (ret != 0) {
 		err("write ioctl failed.. ret(%ld)\n", ret);
-		memdiff(wbuf, rbuf, 0, data_size);
+		ret = -memdiff(wbuf, rbuf, 0, data_size);
+		__test_write_dbg_dump(wbuf, "wbuf", ret, data_size);
+		__test_write_dbg_dump(rbuf, "rbuf", ret, data_size);
 	}
 	free(wbuf);
 	free(rbuf);
 	CuAssertTrue(self, ret == 0);
+}
+
+TEST(write_lba)
+{
+	size_t const data_size = 12288;
+	uint64_t const slba = 1000;
+
+	__test_write(self, slba, data_size);
+}
+
+TEST(write_lba_8k)
+{
+	/*Try writing using a different block layout to determine
+	 if I/O functionality works irrespective of r/w granularity*/
+	size_t static const blk_siz = 8192;
+	uint64_t const slba = 117;
+	uint32_t const nsid = 1;
+	uint16_t const nlb = 3;
+
+	int lbaf;
+	size_t data_size;
+
+	lbaf = find_lbaf_w_ds(self, blk_siz);
+	CuAssert(self,
+		"Could not find LBAF where data blocks were 8k",
+		lbaf != -1
+	);
+
+	format_ns(self, nsid,
+		FORMAT_SET_LBAF(format_default_settings(), lbaf)
+	);
+	data_size = nlb * blk_siz;
+	__test_write(self, slba, data_size);
+}
+
+TEST(write_lba_1k)
+{
+	size_t static const blk_siz = 1024;
+	uint64_t const slba = 200;
+	uint32_t const nsid = 1;
+	uint16_t const nlb = 3;
+
+	int lbaf;
+	size_t data_size;
+
+	lbaf = find_lbaf_w_ds(self, blk_siz);
+	CuAssert(self,
+		"Could not find LBAF where data blocks were 1k",
+		lbaf != -1
+	);
+
+	format_ns(self, nsid,
+		FORMAT_SET_LBAF(format_default_settings(), lbaf)
+	);
+	data_size = nlb * blk_siz;
+	__test_write(self, slba, data_size);
 }
 
 int memcmp0(void const *buf, size_t off, size_t len)
@@ -917,6 +1067,8 @@ void IdentifySuite(CuSuite *suite)
 	SUITE_ADD_TEST(suite, test_get_features);
 	SUITE_ADD_TEST(suite, test_set_responsibility);
 	SUITE_ADD_TEST(suite, test_write_lba);
+	SUITE_ADD_TEST(suite, test_write_lba_8k);
+	SUITE_ADD_TEST(suite, test_write_lba_1k);
 	SUITE_ADD_TEST(suite, test_erase_sync);
 	SUITE_ADD_TEST(suite, test_erase_async);
 	SUITE_ADD_TEST(suite, test_p2l_tbl);
