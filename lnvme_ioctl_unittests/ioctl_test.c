@@ -534,21 +534,6 @@ uint64_t get_granularity(CuTest *self, uint32_t nsid, IOType t)
 	}
 }
 
-uint64_t len_to_nblocks(CuTest *self,
-			uint32_t nsid, IOType t, uint64_t len)
-{
-	uint64_t gran = get_granularity(self, nsid, t);
-	CuAssert(self,
-		"data length in test NOT an exact multiple of blocks!",
-		len % gran == 0
-	);
-	return len / gran;
-}
-
-//#define DATA_DIR_READ 1ULL
-//#define DATA_DIR_WRITE 2ULL
-//typedef uint64_t data_dir_t;
-
 typedef void (*cmd_io_cb)(struct nvme_user_io *cmd, void *data);
 struct uio_buf {
 	uint8_t *data;
@@ -559,6 +544,8 @@ struct uio_buf {
 void ioctl_io_cmd(CuTest *self, IOType iot,
 		struct uio_buf *buf, cmd_io_cb usr_cb, void *data)
 {
+	static uint32_t const NVME_SUCCESS = 0x0;
+	static uint32_t const NVME_NO_COMPLETE = 0xffff;
 	int ret, fd;
 	struct nvme_user_io *cmd = NULL;
 
@@ -584,7 +571,9 @@ void ioctl_io_cmd(CuTest *self, IOType iot,
 		memcpy((void *)cmd->addr, buf->data, buf->len);
 	ret = ioctl(fd, NVME_IOCTL_SUBMIT_IO, cmd);
 	close(fd);
-	CuAssertTrue(self, ret >= 0);
+	CuAssert(self,
+		"Error processing I/O ioctl",
+		(ret == NVME_SUCCESS) || (ret == NVME_NO_COMPLETE));
 	if (iot == IOTYPE_READ)
 		memcpy(buf->data, (void const *)cmd->addr, buf->len);
 	free(cmd);
@@ -790,7 +779,8 @@ void __erase_common_start(CuTest *self, uint64_t slba, uint32_t nsid,
 
 	data_size = nlb * __le64_to_cpu(chnl.gran_write);
 	buf = calloc(1, data_size);
-	CuAssert(self, "Memory allocation for test failed!", buf);
+	CuAssert(self, "Memory allocation for test failed!",
+		buf != NULL);
 
 	ret = readfile("testdata", rand() % (TEST_FILE_SIZE-data_size),
 		buf, data_size);
@@ -846,7 +836,7 @@ TEST(erase_async)
 	erase_async(self, nsid, slba, nlb);
 	CuAssert(self,
 		"sleep was interrupted, re-run tests!",
-		sleep(2) == 0);
+		sleep(1) == 0);
 
 	__erase_common_end(self, slba, buf, data_size);
 }
